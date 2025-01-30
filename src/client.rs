@@ -9,6 +9,23 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use url::Url;
 
+#[cfg(feature = "middleware")]
+#[derive(Default)]
+struct EmptyMiddleware;
+
+#[cfg(feature = "middleware")]
+#[async_trait::async_trait]
+impl reqwest_middleware::Middleware for EmptyMiddleware {
+    async fn handle(
+        &self,
+        req: reqwest::Request,
+        extensions: &mut task_local_extensions::Extensions,
+        next: reqwest_middleware::Next<'_>,
+    ) -> reqwest_middleware::Result<reqwest::Response> {
+        next.run(req, extensions).await
+    }
+}
+
 /// Provides a builder to set some query parameters in the context
 /// of an instant query before sending it to Prometheus.
 #[derive(Clone)]
@@ -623,7 +640,10 @@ impl LabelValuesQueryBuilder {
 /// that manages connections for us.
 #[derive(Clone)]
 pub struct Client {
+    #[cfg(not(feature = "middleware"))]
     pub(crate) client: reqwest::Client,
+    #[cfg(feature = "middleware")]
+    pub(crate) client: reqwest_middleware::ClientWithMiddleware,
     pub(crate) base_url: Url,
 }
 
@@ -637,7 +657,12 @@ impl Default for Client {
     /// ```
     fn default() -> Self {
         Client {
+            #[cfg(not(feature = "middleware"))]
             client: reqwest::Client::new(),
+            #[cfg(feature = "middleware")]
+            client: reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+                .with(EmptyMiddleware::default())
+                .build(),
             base_url: Url::parse("http://127.0.0.1:9090/").unwrap(),
         }
     }
@@ -659,7 +684,12 @@ impl std::str::FromStr for Client {
     fn from_str(url: &str) -> Result<Self, Self::Err> {
         let client = Client {
             base_url: url.to_base_url()?,
+            #[cfg(not(feature = "middleware"))]
             client: reqwest::Client::new(),
+            #[cfg(feature = "middleware")]
+            client: reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+                .with(EmptyMiddleware::default())
+                .build(),
         };
         Ok(client)
     }
@@ -681,7 +711,12 @@ impl std::convert::TryFrom<&str> for Client {
     fn try_from(url: &str) -> Result<Self, Self::Error> {
         let client = Client {
             base_url: url.to_base_url()?,
+            #[cfg(not(feature = "middleware"))]
             client: reqwest::Client::new(),
+            #[cfg(feature = "middleware")]
+            client: reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+                .with(EmptyMiddleware::default())
+                .build(),
         };
         Ok(client)
     }
@@ -704,7 +739,12 @@ impl std::convert::TryFrom<String> for Client {
     fn try_from(url: String) -> Result<Self, Self::Error> {
         let client = Client {
             base_url: url.to_base_url()?,
+            #[cfg(not(feature = "middleware"))]
             client: reqwest::Client::new(),
+            #[cfg(feature = "middleware")]
+            client: reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+                .with(EmptyMiddleware::default())
+                .build(),
         };
         Ok(client)
     }
@@ -733,7 +773,13 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
+    #[cfg(not(feature = "middleware"))]
     pub fn inner(&self) -> &reqwest::Client {
+        &self.client
+    }
+
+    #[cfg(feature = "middleware")]
+    pub fn inner(&self) -> &reqwest_middleware::ClientWithMiddleware {
         &self.client
     }
 
@@ -776,7 +822,17 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
+    #[cfg(not(feature = "middleware"))]
     pub fn from(client: reqwest::Client, url: &str) -> Result<Self, Error> {
+        let base_url = url.to_base_url()?;
+        Ok(Client { base_url, client })
+    }
+
+    #[cfg(feature = "middleware")]
+    pub fn from(
+        client: reqwest_middleware::ClientWithMiddleware,
+        url: &str,
+    ) -> Result<Self, Error> {
         let base_url = url.to_base_url()?;
         Ok(Client { base_url, client })
     }
@@ -806,7 +862,13 @@ impl Client {
         let response = request.send().await.map_err(|source| {
             Error::Client(ClientError {
                 message: "failed to send request to server",
+                #[cfg(not(feature = "middleware"))]
                 source: Some(source),
+                #[cfg(feature = "middleware")]
+                source: match source {
+                    reqwest_middleware::Error::Middleware(_) => None,
+                    reqwest_middleware::Error::Reqwest(e) => Some(e),
+                },
             })
         })?;
         Ok(response)
@@ -1392,7 +1454,13 @@ impl Client {
             .map_err(|source| {
                 Error::Client(ClientError {
                     message: "failed to send request to health endpoint",
+                    #[cfg(not(feature = "middleware"))]
                     source: Some(source),
+                    #[cfg(feature = "middleware")]
+                    source: match source {
+                        reqwest_middleware::Error::Middleware(_) => None,
+                        reqwest_middleware::Error::Reqwest(e) => Some(e),
+                    },
                 })
             })?
             .error_for_status()
@@ -1428,7 +1496,13 @@ impl Client {
             .map_err(|source| {
                 Error::Client(ClientError {
                     message: "failed to send request to readiness endpoint",
+                    #[cfg(not(feature = "middleware"))]
                     source: Some(source),
+                    #[cfg(feature = "middleware")]
+                    source: match source {
+                        reqwest_middleware::Error::Middleware(_) => None,
+                        reqwest_middleware::Error::Reqwest(e) => Some(e),
+                    },
                 })
             })?
             .error_for_status()
